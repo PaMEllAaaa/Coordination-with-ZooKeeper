@@ -88,10 +88,44 @@ class LockV2:
         self.wakeups = 0
 
     def acquire(self):
-        raise NotImplementedError("Part A2: implement LockV2.acquire()")
+        #1. Create node with ephemeral and sequence flags
+        self.my_path = self.zk.create(f"{self.dir}/lock-", ephemeral=True, sequence=True)
+        
+        while True:
+            #2. List the children of /lock and sort them by number
+            children = self.zk.get_children(self.dir)
+            children.sort()
+
+            my_node_name = self.my_path.split("/")[-1]
+            my_index = children.index(my_node_name)
+            
+            #3. If mine has the lowest number, I hold the lock. Done.
+            if my_index == 0:
+                return
+            
+            #4. Otherwise, find the lock node just before mine.
+            prev_node_name = children[my_index - 1]
+            prev_node_path = f"{self.dir}/{prev_node_name}"
+            
+            # prep Event and callback for WATCH
+            changed = threading.Event()
+            def on_change(event):
+                self.wakeups += 1
+                changed.set()
+                
+            #5. Check that it still exists AND set a watch on it (in one call)
+            # - If it is already gone → go back to step 2.
+            # - If it exists → wait for the notification, then go back to step 2.
+            if self.zk.exists(prev_node_path, watch=on_change):
+                changed.wait()
 
     def release(self):
-        raise NotImplementedError("Part A2: implement LockV2.release()")
+        # Delete my node to release lock and let other use
+        try:
+            if self.my_path:
+                self.zk.delete(self.my_path)
+        except NoNodeError:
+            pass
 
 
 LOCKS = {"none": NoLock, "v1": LockV1, "v2": LockV2}
